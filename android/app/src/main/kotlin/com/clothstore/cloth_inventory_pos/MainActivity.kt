@@ -1,0 +1,5 @@
+package com.clothstore.cloth_inventory_pos
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()
