@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cloth_inventory_pos/core/errors/app_exception.dart';
-import 'package:postgrest/postgrest.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
