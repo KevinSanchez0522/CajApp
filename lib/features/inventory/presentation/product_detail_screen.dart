@@ -6,8 +6,9 @@ import '../data/inventory_repository.dart';
 import '../domain/product.dart';
 import '../domain/product_variant.dart';
 import '../services/qr_label_printer.dart';
-import '../../../core/config/app_defaults.dart';
 import '../../../core/errors/app_exception.dart';
+import '../../../core/widgets/dialog_body.dart';
+import '../../auth/data/admin_pin.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../auth/domain/user_profile.dart';
 
@@ -227,7 +228,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
 
     await showDialog<void>(
       context: context,
-      builder: (dialogCtx) => _DialogBody(
+      builder: (dialogCtx) => DialogBody(
         controllers: [qtyController, pinController],
         builder: (dialogCtx, setDialogState) {
           Future<void> confirm() async {
@@ -248,7 +249,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
               });
 
               final authorized =
-                  await _verifyAdminPin(ref, pinController.text);
+                  await verifyAdminPin(ref, pinController.text);
               if (!authorized) {
                 if (dialogCtx.mounted) {
                   setDialogState(() {
@@ -393,7 +394,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
 
     await showDialog<void>(
       context: context,
-      builder: (dialogCtx) => _DialogBody(
+      builder: (dialogCtx) => DialogBody(
         controllers: [pinController],
         builder: (dialogCtx, setDialogState) {
           Future<void> confirm() async {
@@ -412,7 +413,7 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                 errorText = '';
               });
 
-              final authorized = await _verifyAdminPin(ref, pin);
+              final authorized = await verifyAdminPin(ref, pin);
               if (!authorized) {
                 if (dialogCtx.mounted) {
                   setDialogState(() {
@@ -543,72 +544,6 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
       ),
     );
   }
-
-  /// Comprueba que el código introducido coincida con el PIN de administrador.
-  ///
-  /// Se acepta el PIN guardado para el usuario admin por defecto y, si quien
-  /// opera es admin, también su propio PIN. Si nunca se guardó ninguno, se
-  /// valida contra el PIN por defecto de la app para no bloquear la función.
-  Future<bool> _verifyAdminPin(WidgetRef ref, String pin) async {
-    final code = pin.trim();
-    if (code.isEmpty) return false;
-
-    final repo = ref.read(authRepositoryProvider);
-    final profile = ref.read(currentUserProfileProvider);
-
-    final candidates = <String>{
-      AppDefaults.adminUserId,
-      if (profile.isAdmin) profile.id,
-    };
-    for (final userId in candidates) {
-      if (await repo.verifyLocalPin(userId, code)) return true;
-    }
-
-    final stored = await repo.getLocalPin(AppDefaults.adminUserId);
-    if ((stored == null || stored.isEmpty) &&
-        code == AppDefaults.defaultAdminPin) {
-      return true;
-    }
-    return false;
-  }
-}
-
-/// Contenido de un diálogo que es dueño de sus [TextEditingController].
-///
-/// Tiene la misma forma que `StatefulBuilder`, pero libera los controllers en
-/// su propio `dispose()`, es decir, exactamente cuando el `AlertDialog` deja
-/// de existir.
-///
-/// Esto es importante porque `showDialog` se resuelve en el momento del `pop`
-/// de la ruta, ANTES de que termine la animación de salida y el diálogo se
-/// desmonte. Si se dispusieran los controllers justo ahí, el `TextFormField`
-/// seguiría montado y, al reconstruirse, recibiría un controller ya destruido
-/// ("A TextEditingController was used after being disposed"), lo que corrompe el
-/// árbol y provoca la pantalla roja con `_dependents.isEmpty`.
-class _DialogBody extends StatefulWidget {
-  const _DialogBody({
-    required this.controllers,
-    required this.builder,
-  });
-
-  final List<TextEditingController> controllers;
-  final Widget Function(BuildContext, void Function(void Function())) builder;
-
-  @override
-  State<_DialogBody> createState() => _DialogBodyState();
-}
-
-class _DialogBodyState extends State<_DialogBody> {
-  @override
-  void dispose() {
-    for (final controller in widget.controllers) {
-      controller.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.builder(context, setState);
 }
 
 /// Foto grande con estados de carga / error / ausencia.

@@ -7,6 +7,7 @@ import '../../auth/domain/user_profile.dart';
 import '../domain/product.dart';
 import '../domain/product_variant.dart';
 import 'add_product_screen.dart';
+import 'inventory_cleanup_screen.dart';
 import 'product_detail_screen.dart';
 
 /// Inventario con búsqueda en vivo, filtros por estado, miniaturas de foto
@@ -50,6 +51,18 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
       appBar: AppBar(
         title: const Text('Inventario'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.cleaning_services),
+            tooltip: 'Limpiar inventario',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const InventoryCleanupScreen(),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Actualizar',

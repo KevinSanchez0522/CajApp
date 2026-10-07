@@ -26,6 +26,18 @@ final variantsProvider = FutureProvider<List<ProductVariant>>((ref) {
   return ref.watch(inventoryRepositoryProvider).fetchVariants();
 });
 
+/// Variantes que tuvieron al menos una venta en los últimos [days] días.
+///
+/// La clave es el número de días (0 = no consultar ventas) para que el future
+/// quede estable entre reconstrucciones y no se repita la petición en cada
+/// repaint. Para refrescar hay que invalidar el provider.
+final recentSaleVariantIdsProvider =
+    FutureProvider.family<Set<String>, int>((ref, days) async {
+  if (days <= 0) return const <String>{};
+  final since = DateTime.now().subtract(Duration(days: days));
+  return ref.watch(inventoryRepositoryProvider).variantsSoldSince(since);
+});
+
 class InventoryRepository {
   final _localDb = LocalDatabase.instance;
 
@@ -261,6 +273,32 @@ class InventoryRepository {
   /// En Supabase solo el rol ADMIN puede hacerlo (políticas RLS).
   ///
   /// Devuelve `true` si se borró físicamente y `false` si solo se ocultó.
+  /// IDs de variantes con al menos una venta desde [since].
+  ///
+  /// Devuelve solo lo que hubo en esa ventana, no el histórico completo: así
+  /// la consulta crece con las ventas recientes y no con el total de ventas
+  /// de la tienda (que con el tiempo es mucho más grande).
+  Future<Set<String>> variantsSoldSince(DateTime since) async {
+    if (!SupabaseConfig.isInitialized) {
+      // SQLite guarda las fechas en ISO local (ver pos_repository.dart).
+      return _localDb.variantsSoldSince(since.toIso8601String());
+    }
+
+    final supabase = Supabase.instance.client;
+    try {
+      final rows = await supabase
+          .from('sale_details')
+          .select('variant_id, sales!inner(created_at)')
+          .gte('sales.created_at', since.toUtc().toIso8601String());
+      return rows.map((row) => row['variant_id'] as String).toSet();
+    } on PostgrestException catch (e) {
+      throw mapErrorToAppException(
+        e,
+        contexto: 'Error al consultar las ventas recientes',
+      );
+    }
+  }
+
   Future<bool> deleteProduct(String productId) async {
     if (!SupabaseConfig.isInitialized) {
       if (await _localDb.productHasSales(productId)) {

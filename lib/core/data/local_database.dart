@@ -327,6 +327,20 @@ class LocalDatabase {
     return ((res.first['total'] as num?)?.toInt() ?? 0) > 0;
   }
 
+  /// Variantes que tuvieron al menos una venta a partir de [sinceIso].
+  ///
+  /// [sinceIso] debe venir en formato ISO local (`DateTime.toIso8601String()`),
+  /// que es el mismo con el que se guarda `sales.created_at`.
+  Future<Set<String>> variantsSoldSince(String sinceIso) async {
+    final res = await _db!.rawQuery('''
+      SELECT DISTINCT sd.variant_id AS vid
+      FROM sale_details sd
+      JOIN sales s ON s.id = sd.sale_id
+      WHERE s.created_at >= ?
+    ''', [sinceIso]);
+    return res.map((row) => row['vid'] as String).toSet();
+  }
+
   /// Desactiva la prenda (borrado lógico): desaparece del inventario y del
   /// POS, pero se conserva el histórico de ventas.
   Future<void> deactivateProduct(String productId) async {
