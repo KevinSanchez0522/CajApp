@@ -1,8 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../domain/cash_shift.dart';
-import '../../data/pos_repository.dart';
 import '../../../../core/config/supabase_config.dart';
+import '../../../../core/data/local_database.dart';
 
 final cashShiftProvider =
     StateNotifierProvider<CashShiftController, AsyncValue<ShiftSummary?>>(
@@ -10,6 +10,8 @@ final cashShiftProvider =
 );
 
 class CashShiftController extends StateNotifier<AsyncValue<ShiftSummary?>> {
+  final _localDb = LocalDatabase.instance;
+
   CashShiftController() : super(const AsyncValue.loading()) {
     refresh();
   }
@@ -25,19 +27,19 @@ class CashShiftController extends StateNotifier<AsyncValue<ShiftSummary?>> {
 
   Future<ShiftSummary?> _fetchActiveShift() async {
     if (!SupabaseConfig.isInitialized) {
-      final idx = LocalDatabaseSimulation.cashShifts.indexWhere(
-        (s) => s['status'] == 'OPEN',
-      );
-      if (idx == -1) return null;
+      final shifts = await _localDb.getCashShifts(status: 'OPEN');
+      if (shifts.isEmpty) return null;
 
-      final shiftJson = Map<String, dynamic>.from(LocalDatabaseSimulation.cashShifts[idx]);
+      final shiftJson = shifts.first;
       final shift = CashShift.fromJson({
         ...shiftJson,
         'opened_at': shiftJson['opened_at'] ?? DateTime.now().toIso8601String(),
       });
 
+      final sales = await _localDb.getSalesByShift(shift.id);
+
       double cash = 0, card = 0, transfer = 0;
-      for (final sale in LocalDatabaseSimulation.sales) {
+      for (final sale in sales) {
         final amount = (sale['total'] as num).toDouble();
         final method = sale['payment_method'] as String;
         if (method == 'CASH') {
@@ -97,7 +99,7 @@ class CashShiftController extends StateNotifier<AsyncValue<ShiftSummary?>> {
   Future<void> openShift({required String userId, required double baseAmount}) async {
     try {
       if (!SupabaseConfig.isInitialized) {
-        LocalDatabaseSimulation.cashShifts.add({
+        await _localDb.insertCashShift({
           'id': 'shift-${DateTime.now().millisecondsSinceEpoch}',
           'user_id': userId,
           'opening_balance': baseAmount,
@@ -105,6 +107,7 @@ class CashShiftController extends StateNotifier<AsyncValue<ShiftSummary?>> {
           'calculated_cash': 0.0,
           'status': 'OPEN',
           'opened_at': DateTime.now().toIso8601String(),
+          'closed_at': null,
         });
       } else {
         await Supabase.instance.client.from('cash_shifts').insert({
@@ -126,16 +129,12 @@ class CashShiftController extends StateNotifier<AsyncValue<ShiftSummary?>> {
 
     try {
       if (!SupabaseConfig.isInitialized) {
-        final idx = LocalDatabaseSimulation.cashShifts.indexWhere(
-          (s) => s['id'] == current.shift.id,
-        );
-        if (idx >= 0) {
-          LocalDatabaseSimulation.cashShifts[idx]['closing_balance'] = reportedCash;
-          LocalDatabaseSimulation.cashShifts[idx]['calculated_cash'] = current.cashSales;
-          LocalDatabaseSimulation.cashShifts[idx]['status'] = 'CLOSED';
-          LocalDatabaseSimulation.cashShifts[idx]['closed_at'] =
-              DateTime.now().toIso8601String();
-        }
+        await _localDb.updateCashShift(current.shift.id, {
+          'closing_balance': reportedCash,
+          'calculated_cash': current.cashSales,
+          'status': 'CLOSED',
+          'closed_at': DateTime.now().toIso8601String(),
+        });
       } else {
         await Supabase.instance.client
             .from('cash_shifts')

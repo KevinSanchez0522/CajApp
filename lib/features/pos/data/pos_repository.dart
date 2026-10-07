@@ -5,8 +5,10 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:uuid/uuid.dart';
 import '../domain/cart_item.dart';
 import '../../../core/config/supabase_config.dart';
+import '../../../core/data/local_database.dart';
 
 // Simulación local en memoria para modo demostración sin base de datos
+// Mantenida por compatibilidad temporal, migrar a LocalDatabase
 class LocalDatabaseSimulation {
   static final List<Map<String, dynamic>> categories = [
     {'id': 'cat-1', 'name': 'Camisas', 'description': 'Camisas de vestir y casuales'},
@@ -115,6 +117,8 @@ final posRepositoryProvider = Provider<PosRepository>((ref) {
 });
 
 class PosRepository {
+  final _localDb = LocalDatabase.instance;
+
   /// Sube la imagen comprimida
   Future<String> uploadPaymentProof(File originalFile) async {
     if (!SupabaseConfig.isInitialized) {
@@ -167,29 +171,23 @@ class PosRepository {
     }
 
     if (!SupabaseConfig.isInitialized) {
-      // Simular latencia de red
-      await Future.delayed(const Duration(milliseconds: 1200));
-
-      // Buscar si el turno de caja está abierto en local
-      final shiftIndex = LocalDatabaseSimulation.cashShifts.indexWhere(
-        (s) => s['id'] == shiftId && s['status'] == 'OPEN'
-      );
-
-      if (shiftIndex == -1) {
+      // Usar base de datos local SQLite
+      final shift = await _localDb.getOpenShift(cashierId);
+      if (shift == null || shift['id'] != shiftId) {
         throw Exception('El turno de caja especificado no existe o se encuentra cerrado.');
       }
 
       final saleId = const Uuid().v4();
       double total = 0;
 
-      // Validar stock físico localmente de manera segura (simulación de locks)
+      // Validar stock físico localmente (transacción)
       for (final item in items) {
-        final variantIdx = LocalDatabaseSimulation.productVariants.indexWhere((v) => v['id'] == item.variant.id);
-        if (variantIdx == -1) {
+        final variant = await _localDb.getVariantById(item.variant.id);
+        if (variant == null) {
           throw Exception('La variante de producto no existe en el catálogo.');
         }
 
-        final currentStock = LocalDatabaseSimulation.productVariants[variantIdx]['current_stock'] as int;
+        final currentStock = variant['current_stock'] as int;
         if (currentStock < item.quantity) {
           throw Exception('Stock insuficiente para la variante: ${item.variant.sku}. Disponible: $currentStock, Solicitado: ${item.quantity}');
         }
@@ -199,14 +197,11 @@ class PosRepository {
 
       // Aplicar descuentos de stock físico
       for (final item in items) {
-        final variantIdx = LocalDatabaseSimulation.productVariants.indexWhere((v) => v['id'] == item.variant.id);
-        final currentStock = LocalDatabaseSimulation.productVariants[variantIdx]['current_stock'] as int;
-        
-        LocalDatabaseSimulation.productVariants[variantIdx]['current_stock'] = currentStock - item.quantity;
+        await _localDb.decrementStock(item.variant.id, item.quantity);
       }
 
       // Registrar cabecera
-      LocalDatabaseSimulation.sales.add({
+      await _localDb.insertSale({
         'id': saleId,
         'shift_id': shiftId,
         'cashier_id': cashierId,
@@ -215,13 +210,26 @@ class PosRepository {
         'total': total,
         'payment_method': paymentMethod,
         'notes': notes,
+        'proof_path': uploadedProofPath,
         'created_at': DateTime.now().toIso8601String(),
       });
 
+      // Registrar detalles
+      final details = items.map((item) => {
+        'id': const Uuid().v4(),
+        'sale_id': saleId,
+        'variant_id': item.variant.id,
+        'quantity': item.quantity,
+        'unit_price': item.unitPrice,
+      }).toList();
+      await _localDb.insertSaleDetails(details);
+
       // Sumar al total del turno de caja si es efectivo
       if (paymentMethod == 'CASH') {
-        final currentShiftCash = (LocalDatabaseSimulation.cashShifts[shiftIndex]['calculated_cash'] as num).toDouble();
-        LocalDatabaseSimulation.cashShifts[shiftIndex]['calculated_cash'] = currentShiftCash + total;
+        final currentShiftCash = (shift['calculated_cash'] as num).toDouble();
+        await _localDb.updateCashShift(shiftId, {
+          'calculated_cash': currentShiftCash + total,
+        });
       }
 
       return saleId;

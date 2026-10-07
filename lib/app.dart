@@ -8,6 +8,9 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/data/auth_repository.dart';
 import 'features/auth/domain/user_profile.dart';
 import 'features/auth/presentation/login_screen.dart';
+import 'features/auth/presentation/profile_screen.dart';
+import 'features/auth/presentation/app_lock_wrapper.dart';
+import 'features/settings/presentation/report_settings_screen.dart';
 
 class ClothPosApp extends StatelessWidget {
   const ClothPosApp({super.key});
@@ -15,7 +18,7 @@ class ClothPosApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Cloth POS',
+      title: 'VERSATIL FRESH BOUTIQUE',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       home: const _AppEntry(),
@@ -35,10 +38,17 @@ class _AppEntry extends ConsumerWidget {
     final showLogin =
         !SupabaseConfig.isDemoMode && session.status == AuthStatus.unauthenticated;
 
-    if (session.status == AuthStatus.loading &&
-        SupabaseConfig.isInitialized &&
-        !SupabaseConfig.isDemoMode) {
-      return const _SplashScreen();
+    // Evitar mostrar splash interno mientras carga
+    if (session.status == AuthStatus.loading) {
+      if (SupabaseConfig.isDemoMode) {
+        return const AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle.dark,
+          child: Scaffold(body: HomeShell()),
+        );
+      }
+      if (SupabaseConfig.isInitialized) {
+        return const ColoredBox(color: Colors.white);
+      }
     }
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -50,7 +60,12 @@ class _AppEntry extends ConsumerWidget {
                 children: [
                   const _BackendWarning(),
                   _AppHeader(profile: session.profile),
-                  const Expanded(child: HomeShell()),
+                  Expanded(
+                    child: AppLockWrapper(
+                      profile: session.profile,
+                      child: const HomeShell(),
+                    ),
+                  ),
                 ],
               ),
       ),
@@ -130,31 +145,7 @@ class _BackendWarningState extends ConsumerState<_BackendWarning> {
   }
 }
 
-class _SplashScreen extends StatelessWidget {
-  const _SplashScreen();
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.storefront,
-              size: 56,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 20),
-            const CircularProgressIndicator(),
-            const SizedBox(height: 12),
-            const Text('Conectando con el servidor…'),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _AppHeader extends ConsumerWidget {
   const _AppHeader({required this.profile});
@@ -175,54 +166,121 @@ class _AppHeader extends ConsumerWidget {
         left: 16,
         right: 8,
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.storefront, color: Colors.white, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'BOUTIQUE FASHION',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                ),
-                Text(
-                  '${current.fullName} · ${current.role.name.toUpperCase()}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 11),
-                ),
-              ],
-            ),
+      child: PopupMenuButton<_HeaderAction>(
+        onSelected: (action) => _onMenuAction(context, ref, action, isDemo),
+        tooltip: 'Menú',
+        itemBuilder: (_) => [
+          const PopupMenuItem(
+            value: _HeaderAction.perfil,
+            child: Row(children: [
+              Icon(Icons.person_outline, size: 20),
+              SizedBox(width: 10),
+              Text('Mi perfil'),
+            ]),
           ),
-          if (isDemo)
-            PopupMenuButton<UserRole>(
-              icon: const Icon(Icons.switch_account, color: Colors.white),
-              tooltip: 'Cambiar rol (demo)',
-              onSelected: (role) =>
-                  ref.read(sessionProvider.notifier).switchDemoRole(role),
-              itemBuilder: (_) => const [
-                PopupMenuItem(
-                  value: UserRole.admin,
-                  child: Text('Entrar como ADMIN'),
-                ),
-                PopupMenuItem(
-                  value: UserRole.colaborador,
-                  child: Text('Entrar como COLABORADOR'),
-                ),
-              ],
-            )
-          else
-            IconButton(
-              icon: const Icon(Icons.logout, color: Colors.white),
-              tooltip: 'Cerrar sesión',
-              onPressed: () => ref.read(sessionProvider.notifier).signOut(),
+          const PopupMenuItem(
+            value: _HeaderAction.config,
+            child: Row(children: [
+              Icon(Icons.settings_outlined, size: 20),
+              SizedBox(width: 10),
+              Text('Configuración'),
+            ]),
+          ),
+          const PopupMenuDivider(),
+          if (!isDemo)
+            const PopupMenuItem(
+              value: _HeaderAction.cambiarUsuario,
+              child: Row(children: [
+                Icon(Icons.logout, size: 20),
+                SizedBox(width: 10),
+                Text('Cambiar de usuario'),
+              ]),
             ),
+          if (isDemo) ...[
+            const PopupMenuItem(
+              value: _HeaderAction.demoAdmin,
+              child: Text('Entrar como ADMIN'),
+            ),
+            const PopupMenuItem(
+              value: _HeaderAction.demoColab,
+              child: Text('Entrar como COLABORADOR'),
+            ),
+          ],
         ],
+        child: Row(
+          children: [
+            const Icon(Icons.storefront, color: Colors.white, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'VERSATIL FRESH BOUTIQUE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                  Text(
+                    '${current.fullName} · ${current.role.name.toUpperCase()}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_drop_down, color: Colors.white70),
+          ],
+        ),
       ),
     );
   }
+
+  Future<void> _onMenuAction(
+    BuildContext context,
+    WidgetRef ref,
+    _HeaderAction action,
+    bool isDemo,
+  ) async {
+    if (action == _HeaderAction.perfil) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ProfileScreen()),
+      );
+    } else if (action == _HeaderAction.config) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ReportSettingsScreen()),
+      );
+    } else if (action == _HeaderAction.cambiarUsuario) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Cambiar de usuario'),
+          content: const Text(
+              'Se cerrará la sesión actual y volverás a la pantalla de acceso.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Cerrar sesión'),
+            ),
+          ],
+        ),
+      );
+      if (confirm == true) {
+        ref.read(sessionProvider.notifier).signOut();
+      }
+    } else if (action == _HeaderAction.demoAdmin) {
+      ref.read(sessionProvider.notifier).switchDemoRole(UserRole.admin);
+    } else if (action == _HeaderAction.demoColab) {
+      ref.read(sessionProvider.notifier).switchDemoRole(UserRole.colaborador);
+    }
+  }
 }
+
+enum _HeaderAction { perfil, config, cambiarUsuario, demoAdmin, demoColab }

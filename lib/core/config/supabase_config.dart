@@ -3,15 +3,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../errors/app_exception.dart';
 
 class SupabaseConfig {
-  // Configuración de Supabase (Reemplazar con tus credenciales de producción)
+  // Configuración de Supabase - PRODUCCIÓN
   static const String supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://demo-pos-cloth.supabase.co',
+    defaultValue: 'https://zrtjyjmcdlfdpsqpzdjh.supabase.co',
   );
 
   static const String supabaseAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
-    defaultValue: 'demo-anon-key-placeholder',
+    defaultValue:
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpydGp5am1jZGxmZHBzcXB6ZGpoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzMDU5NDEsImV4cCI6MjEwNjg4MTk0MX0.fFdPR4K0UjN3NH1izihNnXUbHTPgYMcefc_H5fHD2WI',
   );
 
   static bool isInitialized = false;

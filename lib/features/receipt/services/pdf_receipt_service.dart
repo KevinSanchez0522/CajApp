@@ -157,7 +157,7 @@ class PdfReceiptService {
       ShareParams(
         files: [XFile(pdfFile.path)],
         text:
-            'Adjunto comprobante de compra en Boutique Fashion Store. Gracias por preferirnos!',
+            'Adjunto comprobante de compra en VERSATIL FRESH BOUTIQUE Store. Gracias por preferirnos!',
         subject: 'Recibo Digital de Compra',
         sharePositionOrigin: sharePositionOrigin,
       ),

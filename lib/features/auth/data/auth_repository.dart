@@ -2,15 +2,19 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/supabase_config.dart';
 import '../../../core/errors/app_exception.dart';
 import '../domain/user_profile.dart';
+import 'pin_service.dart';
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
-  return AuthRepository(const FlutterSecureStorage());
+  return AuthRepository(const FlutterSecureStorage(), ref.watch(pinServiceProvider));
 });
+
+final pinServiceProvider = Provider<PinService>((ref) => PinService());
 
 // --------------------------------------------------------------------------
 // Estado de sesión
@@ -168,8 +172,9 @@ class SessionController extends StateNotifier<AuthSession> {
 
 class AuthRepository {
   final FlutterSecureStorage _storage;
+  final PinService _pinService;
 
-  AuthRepository(this._storage);
+  AuthRepository(this._storage, this._pinService);
 
   static const UserProfile demoAdminProfile = UserProfile(
     id: 'admin-001-uuid',
@@ -186,6 +191,56 @@ class AuthRepository {
     role: UserRole.colaborador,
     isActive: true,
   );
+
+  // ---------- Gestión de PIN local ----------
+
+  /// Configura el PIN local para el usuario actual
+  Future<void> setLocalPin(String userId, String pin) async {
+    await _pinService.setPin(userId, pin);
+  }
+
+  /// Verifica el PIN local
+  Future<bool> verifyLocalPin(String userId, String pin) async {
+    return await _pinService.verifyPin(userId, pin);
+  }
+
+  /// Elimina el PIN local
+  Future<void> clearLocalPin(String userId) async {
+    await _pinService.clearPin(userId);
+  }
+
+  /// Comprueba si el usuario tiene PIN configurado
+  Future<bool> hasLocalPin(String userId) async {
+    return await _pinService.hasPin(userId);
+  }
+
+  /// Obtiene el PIN almacenado (solo para admin o el propio usuario)
+  Future<String?> getLocalPin(String userId) async {
+    return await _pinService.getPin(userId);
+  }
+
+  /// Habilita/deshabilita biometría
+  Future<void> setBiometricEnabled(String userId, bool enabled) async {
+    await _pinService.setBiometricEnabled(userId, enabled);
+  }
+
+  Future<bool> isBiometricEnabled(String userId) async {
+    return await _pinService.isBiometricEnabled(userId);
+  }
+
+  Future<bool> get isBiometricAvailable async {
+    return await _pinService.isBiometricAvailable;
+  }
+
+  Future<List<BiometricType>> getAvailableBiometrics() async {
+    return await _pinService.getAvailableBiometrics();
+  }
+
+  Future<bool> authenticateWithBiometrics({
+    required String reason,
+  }) async {
+    return await _pinService.authenticateWithBiometrics(reason: reason);
+  }
 
   // ---------- Sesión remota ----------
 
@@ -255,7 +310,10 @@ class AuthRepository {
   Future<UserProfile?> getPersistedProfile() async {
     try {
       final roleStr = await _storage.read(key: 'current_user_role');
-      return roleStr == 'colaborador' ? demoColaboradorProfile : demoAdminProfile;
+      final profile = roleStr == 'colaborador' ? demoColaboradorProfile : demoAdminProfile;
+      // En modo demo, intentamos cargar el PIN si existe
+      final pin = await _pinService.getPin(profile.id);
+      return profile.copyWith(localPin: pin);
     } catch (_) {
       return null;
     }

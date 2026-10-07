@@ -2,13 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 import '../data/inventory_repository.dart';
 import '../domain/category.dart';
+import '../services/qr_label_printer.dart';
 import '../../../core/errors/app_exception.dart';
 
 class VariantDraft {
@@ -23,6 +20,14 @@ class VariantDraft {
     this.initialStock = 5,
     required this.sku,
   });
+}
+
+/// Opción de color predefinida: nombre (se usa para el SKU) + muestra visual.
+class ColorOption {
+  const ColorOption(this.name, this.value);
+
+  final String name;
+  final Color value;
 }
 
 class AddProductScreen extends ConsumerStatefulWidget {
@@ -43,9 +48,61 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
   File? _productImage;
   bool _isSaving = false;
 
-  final List<String> _availableSizes = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'Única'];
-  final Set<String> _selectedSizes = {'S', 'M', 'L'};
+  final List<String> _availableSizes = ['Única', 'XS', 'S', 'M', 'L', 'XL', 'XXL'];
+
+  /// Talla activa. Siempre hay UNA sola talla en el formulario y se cambia a
+  /// mano tocando el chip de la talla deseada.
+  String _selectedSize = 'Única';
+
   final List<VariantDraft> _matrix = [];
+
+  /// Colores principales para elegir (el nombre alimenta el SKU).
+  final List<ColorOption> _colorOptions = const [
+    ColorOption('Negro', Color(0xFF000000)),
+    ColorOption('Blanco', Color(0xFFFFFFFF)),
+    ColorOption('Gris', Color(0xFF9E9E9E)),
+    ColorOption('Azul', Color(0xFF1565C0)),
+    ColorOption('Celeste', Color(0xFF4FC3F7)),
+    ColorOption('Rojo', Color(0xFFC62828)),
+    ColorOption('Naranja', Color(0xFFEF6C00)),
+    ColorOption('Amarillo', Color(0xFFF9A825)),
+    ColorOption('Verde', Color(0xFF2E7D32)),
+    ColorOption('Morado', Color(0xFF6A1B9A)),
+    ColorOption('Rosa', Color(0xFFEC407A)),
+    ColorOption('Beige', Color(0xFFD7CCC8)),
+    ColorOption('Burdeos', Color(0xFF880E4F)),
+    ColorOption('Marfil', Color(0xFFF5F0E6)),
+  ];
+
+  /// Cantidad por defecto al elegir una talla.
+  static const int _defaultQty = 1;
+
+  /// Un controlador de cantidad, para conservar lo digitado aunque se
+  /// regeneren los SKU al cambiar nombre/color.
+  final Map<String, TextEditingController> _qtyControllers = {};
+
+  /// Unidades totales que se están ingresando.
+  int get _totalUnits =>
+      _matrix.fold<int>(0, (sum, item) => sum + _readQty(item.size));
+
+  /// Color efectivo (evita guardar vacío).
+  String get _colorValue =>
+      _colorController.text.trim().isEmpty ? 'Negro' : _colorController.text.trim();
+
+  int _readQty(String size) =>
+      int.tryParse(_qtyControllers[size]?.text ?? '') ?? 0;
+
+  int _incrementQty(String size) {
+    final next = _readQty(size) + 1;
+    _qtyControllers[size]?.text = next.toString();
+    return next;
+  }
+
+  int _decrementQty(String size) {
+    final next = _readQty(size) > 0 ? _readQty(size) - 1 : 0;
+    _qtyControllers[size]?.text = next.toString();
+    return next;
+  }
 
   @override
   void initState() {
@@ -59,29 +116,58 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
     _costController.dispose();
     _priceController.dispose();
     _colorController.dispose();
+    for (final c in _qtyControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
+  /// Regenera la única fila de talla activa.
+  ///
+  /// Se conserva la cantidad digitada mientras no cambie de talla; al cambiar
+  /// de talla la cantidad vuelve a 1. El SKU se genera de forma automática
+  /// (no se muestra).
   void _regenerateMatrix() {
-    final color = _colorController.text.trim().isEmpty
-        ? 'Negro'
-        : _colorController.text.trim();
+    final color = _colorValue;
     final productName = _nameController.text.trim();
+    final size = _selectedSize;
+
+    final keepQty = _matrix.isNotEmpty && _matrix.first.size == size;
+    final qty = keepQty ? _matrix.first.initialStock : _defaultQty;
+
+    // Libera el controlador de la talla anterior (tras el frame, para que no
+    // se use un controlador ya destruido por el rebuild).
+    final removedCtrl = <TextEditingController>[];
+    _qtyControllers.removeWhere((k, ctrl) {
+      if (k == size) return false;
+      removedCtrl.add(ctrl);
+      return true;
+    });
+    if (removedCtrl.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final c in removedCtrl) {
+          c.dispose();
+        }
+      });
+    }
 
     setState(() {
-      _matrix.clear();
-      for (final size in _selectedSizes) {
-        _matrix.add(VariantDraft(
+      _qtyControllers.putIfAbsent(
+        size,
+        () => TextEditingController(text: qty.toString()),
+      );
+      _matrix
+        ..clear()
+        ..add(VariantDraft(
           size: size,
           color: color,
-          initialStock: 5,
+          initialStock: qty,
           sku: InventoryRepository.generateSku(
             productName: productName,
             size: size,
             color: color,
           ),
         ));
-      }
     });
   }
 
@@ -109,7 +195,13 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
     }
     if (_matrix.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selecciona al menos una talla')),
+        const SnackBar(content: Text('Selecciona una talla')),
+      );
+      return;
+    }
+    if (_totalUnits < 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ingresa al menos 1 unidad')),
       );
       return;
     }
@@ -117,44 +209,63 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
     setState(() => _isSaving = true);
 
     try {
+      final variantsToSave = _matrix
+          .map((v) => {
+                'sku': v.sku,
+                'size': v.size,
+                'color': v.color,
+                'current_stock': _readQty(v.size),
+              })
+          .toList();
+      final totalUnits =
+          variantsToSave.fold<int>(0, (s, v) => s + (v['current_stock'] as int));
+      final savedSize = _matrix.first.size;
+
       await ref.read(inventoryRepositoryProvider).registerProduct(
             name: _nameController.text.trim(),
             categoryId: _selectedCategoryId!,
             costPrice: double.parse(_costController.text),
             retailPrice: double.parse(_priceController.text),
-            color: _colorController.text.trim(),
-            variants: _matrix
-                .map((v) => {
-                      'sku': v.sku,
-                      'size': v.size,
-                      'color': v.color,
-                      'current_stock': v.initialStock,
-                    })
-                .toList(),
+            color: _colorValue,
+            variants: variantsToSave,
             image: _productImage,
           );
 
+      if (!mounted) return;
       ref.invalidate(variantsProvider);
       ref.invalidate(productsProvider);
 
-      if (!mounted) return;
       final productName = _nameController.text.trim();
       final margin = double.parse(_priceController.text) -
           double.parse(_costController.text);
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('"${_matrix.length} variantes" ingresadas a bodega. Margen: ${NumberFormat.currency(symbol: r'$', decimalDigits: 2).format(margin)}'),
+          content: Text('$totalUnits unidades de talla $savedSize ingresadas a bodega. Margen: ${NumberFormat.currency(symbol: r'$', decimalDigits: 2).format(margin)}'),
           backgroundColor: Colors.green.shade700,
         ),
       );
 
-      _showPrintLabelsDialog(productName);
+      // Captura las variantes ANTES de limpiar el formulario para que la
+      // impresión de etiquetas use los SKU correctos.
+      final printedVariants = List<VariantDraft>.from(_matrix);
+      _showPrintLabelsDialog(productName, printedVariants);
+
       _formKey.currentState!.reset();
       _nameController.clear();
       _costController.clear();
       _priceController.clear();
-      setState(() => _productImage = null);
+      setState(() {
+        _productImage = null;
+        // Vuelve a la talla única y reinicia la cantidad para el siguiente
+        // ingreso.
+        _selectedSize = 'Única';
+        for (final c in _qtyControllers.values) {
+          c.text = _defaultQty.toString();
+        }
+        _matrix.clear();
+      });
+      _regenerateMatrix();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -166,13 +277,14 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
     }
   }
 
-  void _showPrintLabelsDialog(String productName) {
+  void _showPrintLabelsDialog(String productName, List<VariantDraft> variants) {
+    final sizes = variants.map((v) => v.size).join(', ');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Etiquetas generadas'),
         content: Text(
-            'Se registraron ${_matrix.length} variantes con SKU único. ¿Deseas imprimir las etiquetas QR para el rotulado físico?'),
+            'Se registró la talla $sizes con SKU único. ¿Deseas imprimir las etiquetas QR para el rotulado físico?'),
         actions: [
           TextButton(
             onPressed: () {
@@ -186,8 +298,7 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
             label: const Text('Imprimir etiquetas'),
             onPressed: () async {
               Navigator.of(ctx).pop();
-              final labels = List<VariantDraft>.from(_matrix);
-              await _printQrLabels(productName, labels);
+              await _printQrLabels(productName, variants);
             },
           ),
         ],
@@ -197,59 +308,12 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
 
   Future<void> _printQrLabels(String productName, List<VariantDraft> variants) async {
     try {
-      final pdf = pw.Document();
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(16),
-          build: (context) => [
-            pw.Header(level: 1, child: pw.Text('Etiquetas: $productName')),
-            pw.SizedBox(height: 10),
-            pw.Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: variants.map((v) {
-                return pw.Container(
-                  width: 170,
-                  height: 195,
-                  padding: const pw.EdgeInsets.all(8),
-                  decoration: pw.BoxDecoration(
-                    border: pw.Border.all(color: PdfColors.black, width: 1),
-                    borderRadius: pw.BorderRadius.circular(6),
-                  ),
-                  child: pw.Column(
-                    mainAxisAlignment: pw.MainAxisAlignment.center,
-                    children: [
-                      pw.Text(
-                        productName,
-                        maxLines: 2,
-                        textAlign: pw.TextAlign.center,
-                        style:
-                            pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
-                      ),
-                      pw.Text('Talla: ${v.size} | ${v.color}',
-                          style: const pw.TextStyle(fontSize: 9)),
-                      pw.SizedBox(height: 6),
-                      pw.BarcodeWidget(
-                        barcode: pw.Barcode.qrCode(),
-                        data: v.sku,
-                        width: 92,
-                        height: 92,
-                      ),
-                      pw.SizedBox(height: 6),
-                      pw.Text(v.sku,
-                          style: pw.TextStyle(
-                              fontSize: 8, fontWeight: pw.FontWeight.bold)),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
-        ),
+      await QrLabelPrinter.printLabels(
+        productName: productName,
+        labels: variants
+            .map((v) => QrLabelData(sku: v.sku, size: v.size, color: v.color))
+            .toList(),
       );
-
-      await Printing.layoutPdf(onLayout: (_) => pdf.save());
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -443,113 +507,140 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
                         ),
                       );
                     }),
-                  TextFormField(
-                    controller: _colorController,
-                    textCapitalization: TextCapitalization.words,
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: _colorValue,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Color principal',
                       prefixIcon: Icon(Icons.palette_outlined),
                     ),
-                    onChanged: (_) => _regenerateMatrix(),
+                    items: _colorOptions.map((opt) {
+                      return DropdownMenuItem(
+                        value: opt.name,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 20,
+                              height: 20,
+                              decoration: BoxDecoration(
+                                color: opt.value,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.black26),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(opt.name),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _colorController.text = v);
+                      _regenerateMatrix();
+                    },
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? 'Selecciona un color' : null,
                   ),
                   const SizedBox(height: 20),
-                  const Text('Tallas disponibles:',
-                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  Row(
+                    children: [
+                      Icon(Icons.straighten, size: 18, color: Colors.grey.shade700),
+                      const SizedBox(width: 6),
+                      Text('Talla',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey.shade800)),
+                      const Spacer(),
+                      Text('Se cambia a mano',
+                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: _availableSizes.map((size) {
-                      return FilterChip(
+                      return ChoiceChip(
                         label: Text(size),
-                        selected: _selectedSizes.contains(size),
-                        onSelected: (selected) {
-                          setState(() {
-                            if (selected) {
-                              _selectedSizes.add(size);
-                            } else if (_selectedSizes.length > 1) {
-                              _selectedSizes.remove(size);
-                            }
-                          });
+                        selected: _selectedSize == size,
+                        onSelected: (_) {
+                          if (_selectedSize == size) return;
+                          setState(() => _selectedSize = size);
                           _regenerateMatrix();
                         },
                       );
                     }).toList(),
                   ),
                   const SizedBox(height: 22),
-                  Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      const Text(
-                        'Matriz de variantes y stock inicial',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                      ),
-                      TextButton.icon(
-                        icon: const Icon(Icons.autorenew, size: 18),
-                        label: const Text('Regenerar SKU'),
-                        onPressed: _regenerateMatrix,
-                      ),
-                    ],
+                  const Text(
+                    'Cantidad a ingresar',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Indica cuántas unidades llegan en talla $_selectedSize.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                  const SizedBox(height: 12),
                   ..._matrix.map((item) {
                     return Card(
-                      margin: const EdgeInsets.only(bottom: 10),
+                      margin: const EdgeInsets.only(bottom: 8),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                         child: Row(
                           children: [
-                            QrImageView(data: item.sku, version: QrVersions.auto, size: 52),
-                            const SizedBox(width: 12),
                             Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Talla ${item.size} · ${item.color}',
-                                      style:
-                                          const TextStyle(fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    item.sku,
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontFamily: 'monospace',
-                                      color: Colors.grey.shade700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            SizedBox(
-                              width: 92,
-                              child: TextFormField(
-                                initialValue: item.initialStock.toString(),
-                                keyboardType: TextInputType.number,
-                                textAlign: TextAlign.center,
-                                decoration: const InputDecoration(
-                                  labelText: 'Cant.',
-                                  isDense: true,
-                                ),
-                                onChanged: (v) => item.initialStock = int.tryParse(v) ?? 0,
+                              child: Text(
+                                'Talla ${item.size}',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 15),
                               ),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.qr_code_2, size: 20),
-                              tooltip: 'Ver QR',
-                              onPressed: () => _showQrPreview(
-                                context,
-                                item.sku,
-                                'Talla ${item.size} · ${item.color}',
+                              icon: const Icon(Icons.remove_circle_outline),
+                              onPressed: _readQty(item.size) > 0
+                                  ? () => setState(
+                                        () => item.initialStock = _decrementQty(item.size))
+                                  : null,
+                            ),
+                            SizedBox(
+                              width: 56,
+                              child: TextFormField(
+                                key: ValueKey('qty_${item.size}'),
+                                controller: _qtyControllers[item.size],
+                                keyboardType: TextInputType.number,
+                                textAlign: TextAlign.center,
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                ),
+                                onChanged: (v) => setState(
+                                    () => item.initialStock = int.tryParse(v) ?? 0),
                               ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.add_circle_outline),
+                              onPressed: () => setState(
+                                  () => item.initialStock = _incrementQty(item.size)),
                             ),
                           ],
                         ),
                       ),
                     );
                   }),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      'Total: $_totalUnits unidades',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                  ),
                   const SizedBox(height: 20),
                   FilledButton.icon(
                     icon: const Icon(Icons.inventory_2),
@@ -592,29 +683,6 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _showQrPreview(BuildContext context, String sku, String subtitle) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Etiqueta QR'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            QrImageView(data: sku, version: QrVersions.auto, size: 200),
-            const SizedBox(height: 12),
-            Text(subtitle, style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            Text(sku,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
-        ],
       ),
     );
   }

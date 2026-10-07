@@ -10,6 +10,11 @@ class ProductVariant {
   // Propiedades opcionales cargadas de joins
   final String? productName;
   final double? retailPrice;
+  final String? productImageUrl;
+
+  /// Estado de la prenda a la que pertenece (`products.is_active`).
+  /// `false` = prenda desactivada: no debe aparecer en inventario ni en el POS.
+  final bool productIsActive;
 
   const ProductVariant({
     required this.id,
@@ -21,6 +26,8 @@ class ProductVariant {
     this.minStockAlert = 3,
     this.productName,
     this.retailPrice,
+    this.productImageUrl,
+    this.productIsActive = true,
   });
 
   bool get isOutOfStock => currentStock <= 0;
@@ -36,6 +43,8 @@ class ProductVariant {
     int? minStockAlert,
     String? productName,
     double? retailPrice,
+    String? productImageUrl,
+    bool? productIsActive,
   }) {
     return ProductVariant(
       id: id ?? this.id,
@@ -47,7 +56,17 @@ class ProductVariant {
       minStockAlert: minStockAlert ?? this.minStockAlert,
       productName: productName ?? this.productName,
       retailPrice: retailPrice ?? this.retailPrice,
+      productImageUrl: productImageUrl ?? this.productImageUrl,
+      productIsActive: productIsActive ?? this.productIsActive,
     );
+  }
+
+  /// Convierte 0/1, true/false o ausente a bool (Supabase devuelve bool y
+  /// SQLite devuelve entero).
+  static bool _asBool(dynamic value, {bool fallback = true}) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    return fallback;
   }
 
   factory ProductVariant.fromJson(Map<String, dynamic> json) {
@@ -66,6 +85,12 @@ class ProductVariant {
       retailPrice: productMap != null
           ? (productMap['retail_price'] as num?)?.toDouble()
           : (json['retail_price'] as num?)?.toDouble(),
+      productImageUrl: productMap != null
+          ? (productMap['image_url'] as String?)
+          : (json['product_image_url'] as String?),
+      productIsActive: productMap != null
+          ? _asBool(productMap['is_active'])
+          : _asBool(json['product_is_active']),
     );
   }
 

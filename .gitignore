@@ -45,3 +45,10 @@ app.*.map.json
 /android/app/release
 
 .env.json
+
+# Node / Firebase Functions
+# node_modules ya se ignora en functions/.gitignore, esto es una red de seguridad
+node_modules/
+# Salida de compilación de TypeScript (tsconfig -> outDir: lib)
+/functions/lib/
+*.js.map

@@ -7,6 +7,7 @@ import '../controllers/cart_controller.dart';
 import '../controllers/shift_controller.dart';
 import '../../domain/cash_shift.dart';
 import '../../data/pos_repository.dart';
+import '../../../inventory/data/inventory_repository.dart';
 import '../../../receipt/services/pdf_receipt_service.dart';
 import '../../../auth/data/auth_repository.dart';
 
@@ -88,7 +89,11 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
         total: total,
       );
 
+      if (!mounted) return;
       ref.read(cartProvider.notifier).clearCart();
+      // Refresca inventario para reflejar el stock descontado por la venta.
+      ref.invalidate(variantsProvider);
+      ref.invalidate(productsProvider);
       await ref.read(cashShiftProvider.notifier).refresh();
 
       if (!mounted) return;

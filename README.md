@@ -1,4 +1,4 @@
-# Boutique POS · Flutter
+# VERSATIL FRESH BOUTIQUE POS · Flutter
 
 Aplicación móvil (Flutter) para **inventario y punto de venta** de una tienda de ropa.
 Escaneo de QR, control de stock en tiempo real, comprobantes de pago, recibos PDF y arqueo de caja.

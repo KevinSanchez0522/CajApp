@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Boutique POS</string>
+	<string>VERSATIL FRESH BOUTIQUE</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Se requiere la cámara para escanear códigos QR de las prendas y capturar comprobantes de pago.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

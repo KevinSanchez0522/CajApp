@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../controllers/shift_controller.dart';
 import '../../../auth/data/auth_repository.dart';
 import '../../../auth/domain/user_profile.dart';
+import '../../../receipt/services/shift_report_service.dart';
 
 class CashShiftScreen extends ConsumerStatefulWidget {
   const CashShiftScreen({super.key});
@@ -63,11 +64,32 @@ class _CashShiftScreenState extends ConsumerState<CashShiftScreen> {
     if (base == null) return;
     try {
       await notifier.openShift(userId: profile.id, baseAmount: base);
+      if (!mounted) return;
+
+      // Recargar para obtener el turno recién creado
+      await notifier.refresh();
+      if (!mounted) return;
+      final newSummary = ref.read(cashShiftProvider).valueOrNull;
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Turno abierto con base de ${_currency.format(base)}'),
             behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'Ver Reporte',
+              onPressed: () {
+                if (newSummary != null) {
+                  ShiftReportService.generateAndShareOpeningReport(
+                    shift: newSummary.shift,
+                    cashierName: profile.fullName,
+                    cashierRole: profile.role.name.toUpperCase(),
+                    openingBalance: base,
+                    context: context,
+                  );
+                }
+              },
+            ),
           ),
         );
       }
@@ -82,6 +104,7 @@ class _CashShiftScreenState extends ConsumerState<CashShiftScreen> {
 
     _closingCashController.text = summary.expectedCashTotal.toStringAsFixed(2);
     final notifier = ref.read(cashShiftProvider.notifier);
+    final profile = ref.read(currentUserProfileProvider);
 
     final reported = await showDialog<double>(
       context: context,
@@ -126,8 +149,30 @@ class _CashShiftScreenState extends ConsumerState<CashShiftScreen> {
     try {
       await notifier.closeShift(reportedCash: reported);
       if (!mounted) return;
+      
+      // Mostrar resumen y luego ofrecer compartir reporte
+      final expected = summary.shift.openingBalance + summary.cashSales;
+      final diff = reported - expected;
+      
       await _showArqueoSummary(summary.cashSales, summary.cardSales,
           summary.transferSales, summary.shift.openingBalance, reported);
+      
+      if (!mounted) return;
+      
+      // Generar y ofrecer compartir reporte de cierre
+      await ShiftReportService.generateAndShareClosingReport(
+        shift: summary.shift,
+        cashierName: profile.fullName,
+        cashierRole: profile.role.name.toUpperCase(),
+        openingBalance: summary.shift.openingBalance,
+        cashSales: summary.cashSales,
+        cardSales: summary.cardSales,
+        transferSales: summary.transferSales,
+        reportedCash: reported,
+        expectedCash: expected,
+        difference: diff,
+        context: context,
+      );
     } catch (e) {
       if (mounted) _showError(e);
     }
@@ -349,6 +394,45 @@ class _CashShiftScreenState extends ConsumerState<CashShiftScreen> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
                   onPressed: _closeShiftDialog,
+                ),
+                const SizedBox(height: 12),
+                // Botones de reportes
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.receipt_long),
+                        label: const Text('Reporte Apertura'),
+                        onPressed: () => ShiftReportService.generateAndShareOpeningReport(
+                          shift: summary.shift,
+                          cashierName: profile.fullName,
+                          cashierRole: profile.role.name.toUpperCase(),
+                          openingBalance: summary.shift.openingBalance,
+                          context: context,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.assessment),
+                        label: const Text('Reporte Parcial'),
+                        onPressed: () => ShiftReportService.generateAndShareClosingReport(
+                          shift: summary.shift,
+                          cashierName: profile.fullName,
+                          cashierRole: profile.role.name.toUpperCase(),
+                          openingBalance: summary.shift.openingBalance,
+                          cashSales: summary.cashSales,
+                          cardSales: summary.cardSales,
+                          transferSales: summary.transferSales,
+                          reportedCash: summary.expectedCashTotal, // Parcial: esperado = reportado
+                          expectedCash: summary.expectedCashTotal,
+                          difference: 0.0,
+                          context: context,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 20),
               ],

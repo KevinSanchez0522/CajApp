@@ -1,5 +1,5 @@
 -- =============================================================
--- Boutique Fashion POS  ·  Esquema PostgreSQL (Supabase)
+-- VERSATIL FRESH BOUTIQUE POS  ·  Esquema PostgreSQL (Supabase)
 -- Ejecutar en el SQL Editor de Supabase
 -- =============================================================
 
@@ -261,6 +261,59 @@ BEGIN
     RETURN v_product_id;
 END;
 $$;
+
+-- =============================================================
+-- RPC 3: Eliminar unidades de stock (ajuste manual con auditoría)
+-- La app la llama después de validar el PIN de administrador en el cliente.
+-- =============================================================
+CREATE OR REPLACE FUNCTION public.remove_variant_units(
+    p_variant_id UUID,
+    p_quantity INT
+)
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_current INT;
+    v_new INT;
+BEGIN
+    IF p_quantity IS NULL OR p_quantity <= 0 THEN
+        RAISE EXCEPTION 'La cantidad debe ser mayor a cero.';
+    END IF;
+
+    SELECT current_stock INTO v_current
+    FROM public.product_variants
+    WHERE id = p_variant_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'La variante % no existe en catalogo.', p_variant_id;
+    END IF;
+
+    IF v_current < p_quantity THEN
+        RAISE EXCEPTION 'Stock insuficiente para variante %. Disponible: %, Solicitado: %',
+            p_variant_id, v_current, p_quantity;
+    END IF;
+
+    v_new := v_current - p_quantity;
+
+    UPDATE public.product_variants
+    SET current_stock = v_new, updated_at = NOW()
+    WHERE id = p_variant_id;
+
+    INSERT INTO public.inventory_movements
+        (variant_id, type, quantity, stock_before, stock_after, reference_id, performed_by)
+    VALUES (p_variant_id, 'ADJUSTMENT', -p_quantity, v_current, v_new, NULL, auth.uid());
+
+    RETURN v_new;
+END;
+$$;
+
+-- Solo usuarios autenticados pueden llamarla (no el rol anónimo).
+REVOKE ALL ON FUNCTION public.remove_variant_units(UUID, INT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.remove_variant_units(UUID, INT) TO authenticated, service_role;
 
 -- =============================================================
 -- Row Level Security

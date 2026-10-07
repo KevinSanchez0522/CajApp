@@ -5,40 +5,71 @@ import '../data/inventory_repository.dart';
 import '../../auth/data/auth_repository.dart';
 import '../../auth/domain/user_profile.dart';
 import '../domain/product.dart';
-import '../../pos/presentation/screens/pos_scanner_screen.dart';
+import '../domain/product_variant.dart';
+import 'add_product_screen.dart';
+import 'product_detail_screen.dart';
 
-class InventoryScreen extends ConsumerWidget {
+/// Inventario con búsqueda en vivo, filtros por estado, miniaturas de foto
+/// y navegación a la ficha de detalle de cada prenda (foto + QR + reimpresión).
+class InventoryScreen extends ConsumerStatefulWidget {
   const InventoryScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<InventoryScreen> createState() => _InventoryScreenState();
+}
+
+class _InventoryScreenState extends ConsumerState<InventoryScreen> {
+  final _searchController = TextEditingController();
+  String _query = '';
+  _StockFilter _filter = _StockFilter.all;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final variantsAsync = ref.watch(variantsProvider);
     final productsAsync = ref.watch(productsProvider);
+    final categoriesAsync = ref.watch(categoriesProvider);
     final profile = ref.watch(currentUserProfileProvider);
     final isAdmin = profile.role == UserRole.admin;
     final currency = NumberFormat.currency(symbol: r'$', decimalDigits: 2);
 
-    final costByProduct = <String, double>{
-      for (final p in (productsAsync.valueOrNull ?? <Product>[])) p.id: p.costPrice,
-    };
-    final nameByProduct = <String, String>{
-      for (final p in (productsAsync.valueOrNull ?? <Product>[])) p.id: p.name,
+    final products = productsAsync.valueOrNull ?? <Product>[];
+    final costByProduct = <String, double>{for (final p in products) p.id: p.costPrice};
+    final nameByProduct = <String, String>{for (final p in products) p.id: p.name};
+    final categoryIdByProduct = <String, String>{for (final p in products) p.id: p.categoryId};
+    final categoryNameById = <String, String>{
+      for (final c in (categoriesAsync.valueOrNull ?? [])) c.id: c.name,
     };
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Inventario de Bodega'),
+        title: const Text('Inventario'),
         actions: [
-          if (isAdmin)
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Actualizar',
-              onPressed: () {
-                ref.invalidate(variantsProvider);
-                ref.invalidate(productsProvider);
-              },
-            ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Actualizar',
+            onPressed: () {
+              ref.invalidate(variantsProvider);
+              ref.invalidate(productsProvider);
+              ref.invalidate(categoriesProvider);
+            },
+          ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.add),
+        label: const Text('Añadir prenda'),
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AddProductScreen()),
+          );
+        },
       ),
       body: variantsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -52,107 +83,357 @@ class InventoryScreen extends ConsumerWidget {
           final lowStock = variants.where((v) => v.isLowStock).length;
           final outOfStock = variants.where((v) => v.isOutOfStock).length;
 
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Row(
-                children: [
-                  _KpiCard(
-                    label: 'Unidades',
-                    value: '$totalUnits',
-                    color: Colors.teal,
-                    icon: Icons.inventory_2,
-                  ),
-                  const SizedBox(width: 10),
-                  _KpiCard(
-                    label: 'Stock crítico',
-                    value: '$lowStock',
-                    color: Colors.orange.shade700,
-                    icon: Icons.warning_amber,
-                  ),
-                  const SizedBox(width: 10),
-                  _KpiCard(
-                    label: 'Agotados',
-                    value: '$outOfStock',
-                    color: Colors.red.shade700,
-                    icon: Icons.error_outline,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              ...variants.map((v) {
-                final productId = v.productId;
-                final cost = costByProduct[productId] ?? 0.0;
-                final price = v.retailPrice ?? 0.0;
-                final margin = isAdmin ? price - cost : 0.0;
-                final marginPct = isAdmin && cost > 0 ? margin / cost * 100 : 0.0;
+          // ---------- Búsqueda + filtro por estado ----------
+          final q = _query.trim().toLowerCase();
+          final filtered = variants.where((v) {
+            // Filtro de estado
+            switch (_filter) {
+              case _StockFilter.all:
+                break;
+              case _StockFilter.low:
+                if (!v.isLowStock) return false;
+              case _StockFilter.out:
+                if (!v.isOutOfStock) return false;
+            }
+            // Búsqueda: nombre, categoría, SKU, talla, color
+            if (q.isEmpty) return true;
+            final name = v.productName ?? nameByProduct[v.productId] ?? '';
+            final catName = categoryNameById[
+                    categoryIdByProduct[v.productId] ?? ''] ??
+                '';
+            final haystack =
+                '$name $catName ${v.sku} ${v.size} ${v.color}'.toLowerCase();
+            return haystack.contains(q);
+          }).toList();
 
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                v.productName ?? nameByProduct[productId] ?? v.sku,
-                                style: const TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            StockBadge(stock: v.currentStock),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '${v.size} · ${v.color} · SKU: ${v.sku}',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontFamily: 'monospace',
-                            color: Colors.grey.shade700,
+          return Column(
+            children: [
+              // ---------- KPIs ----------
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Row(
+                  children: [
+                    _KpiCard(
+                      label: 'Unidades',
+                      value: '$totalUnits',
+                      color: Colors.teal,
+                      icon: Icons.inventory_2,
+                    ),
+                    const SizedBox(width: 10),
+                    _KpiCard(
+                      label: 'Stock crítico',
+                      value: '$lowStock',
+                      color: Colors.orange.shade700,
+                      icon: Icons.warning_amber,
+                    ),
+                    const SizedBox(width: 10),
+                    _KpiCard(
+                      label: 'Agotados',
+                      value: '$outOfStock',
+                      color: Colors.red.shade700,
+                      icon: Icons.error_outline,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // ---------- Búsqueda ----------
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  controller: _searchController,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: 'Buscar por nombre, talla, color o SKU…',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _query.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            tooltip: 'Limpiar',
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() => _query = '');
+                            },
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 18,
-                          runSpacing: 6,
-                          children: [
-                            _PriceTag(
-                              label: 'Precio',
-                              value: currency.format(price),
-                            ),
-                            // Restricción RBAC: costo y utilidad solo para ADMIN
-                            if (isAdmin) ...[
-                              _PriceTag(
-                                label: 'Costo',
-                                value: currency.format(cost),
-                                color: Colors.red.shade700,
-                              ),
-                              _PriceTag(
-                                label: 'Utilidad',
-                                value:
-                                    '${currency.format(margin)} (${marginPct.toStringAsFixed(0)}%)',
-                                color: margin > 0 ? Colors.green.shade700 : Colors.red,
-                              ),
-                            ],
-                            _PriceTag(
-                              label: 'Valor en bodega',
-                              value: currency.format(price * v.currentStock),
-                              color: Colors.blue.shade700,
-                            ),
-                          ],
-                        ),
-                      ],
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
                     ),
                   ),
-                );
-              }),
-              const SizedBox(height: 20),
+                  onChanged: (v) => setState(() => _query = v),
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // ---------- Chips de filtro ----------
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    _FilterChip(
+                      label: 'Todos',
+                      selected: _filter == _StockFilter.all,
+                      color: Colors.teal,
+                      onTap: () =>
+                          setState(() => _filter = _StockFilter.all),
+                    ),
+                    const SizedBox(width: 8),
+                    _FilterChip(
+                      label: 'Stock crítico',
+                      selected: _filter == _StockFilter.low,
+                      color: Colors.orange.shade700,
+                      onTap: () =>
+                          setState(() => _filter = _StockFilter.low),
+                    ),
+                    const SizedBox(width: 8),
+                    _FilterChip(
+                      label: 'Agotados',
+                      selected: _filter == _StockFilter.out,
+                      color: Colors.red.shade700,
+                      onTap: () =>
+                          setState(() => _filter = _StockFilter.out),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+
+              // ---------- Resultados ----------
+              Expanded(
+                child: filtered.isEmpty
+                    ? _EmptySearch(query: _query)
+                    : RefreshIndicator(
+                        onRefresh: () async {
+                          ref.invalidate(variantsProvider);
+                          ref.invalidate(productsProvider);
+                        },
+                        child: ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 6, 16, 88),
+                          itemCount: filtered.length,
+                          itemBuilder: (context, i) =>
+                              _buildVariantCard(
+                            context,
+                            filtered[i],
+                            isAdmin,
+                            costByProduct,
+                            nameByProduct,
+                            products,
+                            currency,
+                          ),
+                        ),
+                      ),
+              ),
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildVariantCard(
+    BuildContext context,
+    ProductVariant v,
+    bool isAdmin,
+    Map<String, double> costByProduct,
+    Map<String, String> nameByProduct,
+    List<Product> products,
+    NumberFormat currency,
+  ) {
+    final name = v.productName ?? nameByProduct[v.productId] ?? v.sku;
+    final cost = costByProduct[v.productId] ?? 0.0;
+    final price = v.retailPrice ?? 0.0;
+    final margin = price - cost;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          Product? product;
+          for (final p in products) {
+            if (p.id == v.productId) {
+              product = p;
+              break;
+            }
+          }
+          if (product == null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Producto no encontrado')),
+            );
+            return;
+          }
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ProductDetailScreen(product: product!),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              // Miniatura de la prenda
+              _Thumb(imageUrl: v.productImageUrl),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        StockStatusBadge(stock: v.currentStock),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${v.size} · ${v.color}',
+                      style: TextStyle(
+                          fontSize: 12.5, color: Colors.grey.shade700),
+                    ),
+                    Text(
+                      v.sku,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 14,
+                      runSpacing: 4,
+                      children: [
+                        _PriceTag(
+                          label: 'Precio',
+                          value: currency.format(price),
+                        ),
+                        _PriceTag(
+                          label: 'Valor stock',
+                          value: currency.format(price * v.currentStock),
+                          color: Colors.blue.shade700,
+                        ),
+                        // Restricción RBAC: costo/utilidad solo ADMIN
+                        if (isAdmin)
+                          _PriceTag(
+                            label: 'Utilidad',
+                            value: currency.format(margin),
+                            color:
+                                margin > 0 ? Colors.green.shade700 : Colors.red,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right, color: Colors.grey.shade400),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum _StockFilter { all, low, out }
+
+/// Miniatura de la foto de la prenda (fallback a icono si no hay foto/red).
+class _Thumb extends StatelessWidget {
+  final String? imageUrl;
+
+  const _Thumb({this.imageUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    final isNetwork = imageUrl != null &&
+        (imageUrl!.startsWith('http://') || imageUrl!.startsWith('https://'));
+
+    return Container(
+      width: 58,
+      height: 58,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: isNetwork
+          ? Image.network(
+              imageUrl!,
+              fit: BoxFit.cover,
+              errorBuilder: (ctx, err, st) =>
+                  const Icon(Icons.checkroom, color: Colors.grey),
+            )
+          : const Icon(Icons.checkroom, color: Colors.grey),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      selectedColor: color.withValues(alpha: 0.15),
+      labelStyle: TextStyle(
+        color: selected ? color : Colors.grey.shade700,
+        fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 12.5,
+      ),
+      side: BorderSide(
+        color: selected ? color : Colors.grey.shade400,
+      ),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
+class _EmptySearch extends StatelessWidget {
+  final String query;
+
+  const _EmptySearch({required this.query});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.search_off, size: 56, color: Colors.grey.shade400),
+          const SizedBox(height: 10),
+          Text(
+            query.isEmpty
+                ? 'No hay prendas con este filtro.'
+                : 'Sin resultados para "$query"',
+            style: TextStyle(color: Colors.grey.shade600),
+          ),
+        ],
       ),
     );
   }

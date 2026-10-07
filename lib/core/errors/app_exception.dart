@@ -75,6 +75,15 @@ AppException mapErrorToAppException(Object error, {String contexto = ''}) {
           '${prefijo}La sesión no es válida o expiró. Cierra sesión e inicia sesión de nuevo.',
           code: error.code,
         );
+      case 'PGRST204': // no está en la caché de esquema (tabla o columna)
+        return AppException(
+          '${prefijo}Supabase no encuentra una tabla o columna en su caché de '
+          "esquema. Ejecuta \"NOTIFY pgrst, 'reload schema';\" en el SQL Editor "
+          'de Supabase y vuelve a intentarlo. Si persiste, revisa que el '
+          'schema.sql esté aplicado y que la tabla exista.',
+          code: error.code,
+          retryable: true,
+        );
       case '23505': // unique_violation
         return AppException(
           '${prefijo}Ya existe un registro con esos datos (SKU o código duplicado).',

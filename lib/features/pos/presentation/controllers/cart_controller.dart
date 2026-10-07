@@ -1,8 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/cart_item.dart';
 import '../../../inventory/domain/product_variant.dart';
-import '../../data/pos_repository.dart';
 import '../../../../core/config/supabase_config.dart';
+import '../../../../core/data/local_database.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 final cartProvider = StateNotifierProvider<CartController, List<CartItem>>((ref) {
@@ -10,6 +10,8 @@ final cartProvider = StateNotifierProvider<CartController, List<CartItem>>((ref)
 });
 
 class CartController extends StateNotifier<List<CartItem>> {
+  final _localDb = LocalDatabase.instance;
+
   CartController() : super([]);
 
   double get totalAmount => state.fold(0, (sum, item) => sum + item.subtotal);
@@ -24,10 +26,9 @@ class CartController extends StateNotifier<List<CartItem>> {
     final cleanCode = rawCode.trim();
 
     if (!SupabaseConfig.isInitialized) {
-      // Simulación en memoria
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      final matchIdx = LocalDatabaseSimulation.productVariants.indexWhere(
+      // Base de datos local SQLite
+      final variants = await _localDb.getVariants();
+      final matchIdx = variants.indexWhere(
         (v) => v['sku'].toString().toLowerCase() == cleanCode.toLowerCase(),
       );
 
@@ -36,7 +37,7 @@ class CartController extends StateNotifier<List<CartItem>> {
         return;
       }
 
-      final variantData = LocalDatabaseSimulation.productVariants[matchIdx];
+      final variantData = variants[matchIdx];
       final variant = ProductVariant(
         id: variantData['id'] as String,
         productId: variantData['product_id'] as String,
